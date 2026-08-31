@@ -1,0 +1,174 @@
+name: Multi-Country-Configs
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 0 * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y jq dnsutils geoip-bin geoip-database
+
+      - name: Download subscription
+        run: |
+          curl -fL "https://raw.githubusercontent.com/Epodonios/v2ray-configs/main/All_Configs_Sub.txt" -o all.txt
+          echo "📥 تعداد کل: $(wc -l < all.txt)"
+
+      - name: Detect countries
+        run: |
+          set +e
+
+          # نگاشت: نام نمایشی -> نام دقیقی که geoiplookup برمی‌گرداند
+          declare -A COUNTRY_MAP=(
+            ["USA"]="United States"
+            ["Germany"]="Germany"
+            ["Serbia"]="Serbia"
+            ["Netherlands"]="Netherlands"
+            ["Moldova"]="Moldova, Republic of"
+          )
+
+          get_host() {
+            local line="$1"
+            local host=""
+
+            if [[ "$line" == vmess://* ]]; then
+              local encoded decoded
+              encoded="${line#vmess://}"
+              decoded=$(echo "$encoded" | base64 -d 2>/dev/null)
+              if [ -n "$decoded" ] && echo "$decoded" | jq -e . >/dev/null 2>&1; then
+                host=$(echo "$decoded" | jq -r '.add // empty')
+              fi
+            else
+              host=$(echo "$line" \
+                | sed -E 's#^[a-zA-Z0-9]+://##' \
+                | sed -E 's/^[^@]*@//' \
+                | grep -oE '^[^:/?#]+')
+            fi
+
+            echo "$host"
+          }
+
+          resolve_ip() {
+            local host="$1"
+            [ -z "$host" ] && return
+            if [[ "$host" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+              echo "$host"
+              return
+            fi
+            getent ahostsv4 "$host" 2>/dev/null | awk '{print $1; exit}'
+          }
+
+          > hosts_map.txt
+          > unique_ips.txt
+
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            host=$(get_host "$line")
+            ip=$(resolve_ip "$host")
+            printf '%s\t%s\n' "$line" "$ip" >> hosts_map.txt
+            [ -n "$ip" ] && echo "$ip" >> unique_ips.txt
+          done < all.txt
+
+          sort -u unique_ips.txt -o unique_ips.txt
+          echo "🌐 تعداد IP یکتا: $(wc -l < unique_ips.txt)"
+
+          > country_map.txt
+
+          while IFS= read -r ip; do
+            [ -z "$ip" ] && continue
+            country=$(geoiplookup "$ip" 2>/dev/null | head -1 | sed -n 's/.*: *//p' | sed -n 's/^[^,]*, //p')
+            [ -z "$country" ] && country="Unknown"
+            echo "$ip|$country" >> country_map.txt
+          done < unique_ips.txt
+
+          echo "🗺️ نمونه country_map:"
+          head -n 5 country_map.txt
+
+          # یک فایل خروجی واحد
+          OUTPUT_FILE="configs.txt"
+          > "$OUTPUT_FILE"
+
+          declare -A COUNTER
+          for key in "${!COUNTRY_MAP[@]}"; do
+            COUNTER["$key"]=1
+          done
+
+          while IFS=$'\t' read -r line ip; do
+            [ -z "$line" ] && continue
+
+            country="Unknown"
+            if [ -n "$ip" ]; then
+              country=$(grep "^$ip|" country_map.txt | cut -d'|' -f2 | head -1)
+              [ -z "$country" ] && country="Unknown"
+            fi
+
+            matched_key=""
+            for key in "${!COUNTRY_MAP[@]}"; do
+              if [ "${COUNTRY_MAP[$key]}" == "$country" ]; then
+                matched_key="$key"
+                break
+              fi
+            done
+
+            [ -z "$matched_key" ] && continue
+
+            idx=${COUNTER[$matched_key]}
+
+            if [[ "$line" == vmess://* ]]; then
+              encoded=$(echo "$line" | sed 's/vmess:\/\///')
+              decoded=$(echo "$encoded" | base64 -d 2>/dev/null || echo '')
+
+              if [ -n "$decoded" ] && echo "$decoded" | jq -e . >/dev/null 2>&1; then
+                new_decoded=$(echo "$decoded" | jq --arg name "$matched_key $idx" '.ps = $name')
+                new_encoded=$(echo "$new_decoded" | base64 -w 0)
+                echo "vmess://$new_encoded" >> "$OUTPUT_FILE"
+              else
+                echo "${line%%#*}#$matched_key $idx" >> "$OUTPUT_FILE"
+              fi
+            else
+              echo "${line%%#*}#$matched_key $idx" >> "$OUTPUT_FILE"
+            fi
+
+            COUNTER["$matched_key"]=$((idx + 1))
+
+          done < hosts_map.txt
+
+          echo ""
+          echo "📦 مجموع کانفیگ‌های استخراج‌شده: $(wc -l < "$OUTPUT_FILE")"
+          for key in "${!COUNTER[@]}"; do
+            echo "  $key: $((${COUNTER[$key]} - 1))"
+          done
+
+          echo ""
+          echo "نمونه خروجی:"
+          head -n 5 "$OUTPUT_FILE"
+
+          rm -f unique_ips.txt country_map.txt hosts_map.txt
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+          git add configs.txt
+
+          if git diff --cached --quiet; then
+            echo "✅ بدون تغییر"
+            exit 0
+          fi
+
+          git commit -m "Update configs.txt"
+          git push
