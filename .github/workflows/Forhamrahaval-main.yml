@@ -32,7 +32,7 @@ jobs:
         run: |
           set +e
 
-          # نگاشت: نام نمایشی -> نام دقیقی که geoiplookup برمی‌گرداند
+          # نگاشت: نام فایل خروجی -> نام دقیقی که geoiplookup برمی‌گرداند
           declare -A COUNTRY_MAP=(
             ["USA"]="United States"
             ["Germany"]="Germany"
@@ -40,7 +40,7 @@ jobs:
             ["Moldova"]="Moldova, Republic of"
           )
 
-          MAX_PER_COUNTRY=100
+          MAX_PER_COUNTRY=200
 
           get_host() {
             local line="$1"
@@ -99,12 +99,10 @@ jobs:
           echo "🗺️ نمونه country_map:"
           head -n 5 country_map.txt
 
-          # یک فایل خروجی واحد
-          OUTPUT_FILE="configs.txt"
-          > "$OUTPUT_FILE"
-
+          # ساخت فایل‌های خروجی خالی + شمارنده برای هر کشور
           declare -A COUNTER
           for key in "${!COUNTRY_MAP[@]}"; do
+            > "$key"
             COUNTER["$key"]=1
           done
 
@@ -129,7 +127,7 @@ jobs:
 
             idx=${COUNTER[$matched_key]}
 
-            # اگه به سقف ۱۰۰ تا رسیده بود، این کشور رو دیگه رد کن
+            # اگه به سقف رسیده بود، رد کن
             if [ "$idx" -gt "$MAX_PER_COUNTRY" ]; then
               continue
             fi
@@ -141,12 +139,12 @@ jobs:
               if [ -n "$decoded" ] && echo "$decoded" | jq -e . >/dev/null 2>&1; then
                 new_decoded=$(echo "$decoded" | jq --arg name "$matched_key $idx" '.ps = $name')
                 new_encoded=$(echo "$new_decoded" | base64 -w 0)
-                echo "vmess://$new_encoded" >> "$OUTPUT_FILE"
+                echo "vmess://$new_encoded" >> "$matched_key"
               else
-                echo "${line%%#*}#$matched_key $idx" >> "$OUTPUT_FILE"
+                echo "${line%%#*}#$matched_key $idx" >> "$matched_key"
               fi
             else
-              echo "${line%%#*}#$matched_key $idx" >> "$OUTPUT_FILE"
+              echo "${line%%#*}#$matched_key $idx" >> "$matched_key"
             fi
 
             COUNTER["$matched_key"]=$((idx + 1))
@@ -154,15 +152,16 @@ jobs:
           done < hosts_map.txt
 
           echo ""
-          echo "📦 مجموع کانفیگ‌های استخراج‌شده: $(wc -l < "$OUTPUT_FILE")"
-          for key in "${!COUNTER[@]}"; do
-            count=$((${COUNTER[$key]} - 1))
-            echo "  $key: $count"
+          for key in "${!COUNTRY_MAP[@]}"; do
+            echo "📌 $key: $(wc -l < "$key")"
           done
 
           echo ""
-          echo "نمونه خروجی:"
-          head -n 5 "$OUTPUT_FILE"
+          for key in "${!COUNTRY_MAP[@]}"; do
+            echo "نمونه $key:"
+            head -n 3 "$key"
+            echo ""
+          done
 
           rm -f unique_ips.txt country_map.txt hosts_map.txt
 
@@ -171,12 +170,12 @@ jobs:
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
 
-          git add configs.txt
+          git add USA Germany Serbia Moldova
 
           if git diff --cached --quiet; then
             echo "✅ بدون تغییر"
             exit 0
           fi
 
-          git commit -m "Update configs.txt"
+          git commit -m "Update USA, Germany, Serbia and Moldova"
           git push
