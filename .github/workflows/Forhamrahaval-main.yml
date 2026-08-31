@@ -3,7 +3,8 @@ name: Multi-Country-Configs
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 0 * * *"
+    - cron: "30 4 * * *"   # ساعت 8:00 صبح به وقت ایران
+    - cron: "30 12 * * *"  # ساعت 4:00 بعدازظهر به وقت ایران
 
 permissions:
   contents: write
