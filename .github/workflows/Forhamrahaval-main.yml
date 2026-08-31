@@ -37,9 +37,10 @@ jobs:
             ["USA"]="United States"
             ["Germany"]="Germany"
             ["Serbia"]="Serbia"
-            ["Netherlands"]="Netherlands"
             ["Moldova"]="Moldova, Republic of"
           )
+
+          MAX_PER_COUNTRY=100
 
           get_host() {
             local line="$1"
@@ -128,6 +129,11 @@ jobs:
 
             idx=${COUNTER[$matched_key]}
 
+            # اگه به سقف ۱۰۰ تا رسیده بود، این کشور رو دیگه رد کن
+            if [ "$idx" -gt "$MAX_PER_COUNTRY" ]; then
+              continue
+            fi
+
             if [[ "$line" == vmess://* ]]; then
               encoded=$(echo "$line" | sed 's/vmess:\/\///')
               decoded=$(echo "$encoded" | base64 -d 2>/dev/null || echo '')
@@ -150,7 +156,8 @@ jobs:
           echo ""
           echo "📦 مجموع کانفیگ‌های استخراج‌شده: $(wc -l < "$OUTPUT_FILE")"
           for key in "${!COUNTER[@]}"; do
-            echo "  $key: $((${COUNTER[$key]} - 1))"
+            count=$((${COUNTER[$key]} - 1))
+            echo "  $key: $count"
           done
 
           echo ""
